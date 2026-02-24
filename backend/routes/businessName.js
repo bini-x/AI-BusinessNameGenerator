@@ -1,4 +1,5 @@
 import express from "express";
+import axios from "axios";
 import Groq from "groq-sdk";
 import FavoriteIdea from "../models/FavoriteIdea.js";
 import dotenv from "dotenv";
@@ -11,35 +12,33 @@ router.post("/generateNames", async (req, res) => {
     const { description, category } = req.body;
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-    const prompt = `Generate 5 business names that are of category: ${category}, for business with the following description: "${description}". Return only the names as a JSON array of strings, nothing else. Example format: ["Name1", "Name2", "Name3", "Name4", "Name5"]`;
+    const prompt = `Generate 5 business names that are of category: ${category}, for business with the following description: "${description}". Return only a JSON object like this: { "names": ["Name1", "Name2", "Name3", "Name4", "Name5"] }`;
 
     const result = await groq.chat.completions.create({
       model: "llama-3.1-8b-instant",
       messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" },
     });
 
-    const text = result.choices[0].message.content;
+    const { names } = JSON.parse(result.choices[0].message.content);
 
-    let names;
-    try {
-      const jsonMatch = text.match(/\[.*\]/s);
-      if (jsonMatch) {
-        names = JSON.parse(jsonMatch[0]);
-      } else {
-        names = text
-          .split("\n")
-          .map((line) => line.replace(/^\d+\.\s*/, "").trim())
-          .filter((name) => name.length > 0)
-          .slice(0, 5);
+    const namesWithDomainCheck = [];
+    for (const name of names) {
+      const domain = `${name
+        .toLowerCase()
+        .split(" ")
+        .join("")
+        .replace(/[^a-z0-9]/g, "")}.com`;
+      try {
+        await axios.get(`https://rdap.verisign.com/com/v1/domain/${domain}`);
+        namesWithDomainCheck.push({ name, domain, available: false });
+      } catch (error) {
+        const available = error.response?.status === 404;
+        namesWithDomainCheck.push({ name, domain, available });
       }
-    } catch (error) {
-      console.error("Error parsing Groq response:", error);
-      return res
-        .status(500)
-        .json({ success: false, error: "AI response error" });
     }
 
-    return res.status(200).json({ success: true, data: names });
+    return res.status(200).json({ success: true, data: namesWithDomainCheck });
   } catch (error) {
     console.log(error);
     return res
